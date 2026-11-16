@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Track your order | Tabitha Chicken Company</title>
+<meta name="description" content="Track the status of your Tabitha Chicken Company order using your order reference and phone number.">
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/base.css?v=2">
+<link rel="stylesheet" href="/assets/order.css?v=2">
+</head>
+<body class="track-page">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="logo" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#e3a72f"/><path d="M18 40c0-9 6-15 14-15 3 0 5 1 7 2l8-5-2 9c2 2 3 5 3 9 0 8-7 12-15 12s-15-4-15-12z" fill="#142a1e"/><path d="M24 22c2-5 5-5 6-1 1-4 5-4 5 1z" fill="#142a1e"/><circle cx="40" cy="31" r="1.8" fill="#e3a72f"/></symbol>
+</svg>
+
+<header class="track-header">
+  <div class="wrap">
+    <a class="brand" href="/"><svg aria-hidden="true"><use href="#logo"/></svg>Tabitha Chicken Company</a>
+    <a class="btn btn-line btn-sm" href="/" style="border-color:rgba(255,255,255,.45);color:#fff">Back to shop</a>
+  </div>
+</header>
+
+<main class="track-main">
+  <div class="wrap track-grid">
+    <section class="track-card">
+      <div>
+        <h2>Track your order</h2>
+        <p class="note" style="margin-top:.4rem">Enter the order reference we gave you at checkout together with the phone number you used.</p>
+      </div>
+      <form id="trackForm" novalidate>
+        <div>
+          <label for="orderNo">Order reference</label>
+          <input id="orderNo" name="orderNo" placeholder="TCC-261116-0001" autocomplete="off" autocapitalize="characters" required>
+          <div class="err" id="errOrderNo"></div>
+        </div>
+        <div>
+          <label for="phone">Phone number</label>
+          <input id="phone" name="phone" type="tel" inputmode="tel" placeholder="0712 345 678" autocomplete="tel" required>
+          <div class="err" id="errPhone"></div>
+        </div>
+        <button class="btn btn-green" type="submit" style="width:100%">Check order status</button>
+        <div class="tcc-feedback" id="trackFeedback" role="alert"></div>
+        <p class="note">Orders are confirmed on WhatsApp. If you have not received a reply yet, your order is still pending.</p>
+      </form>
+    </section>
+
+    <section class="track-card" id="trackResult" aria-live="polite">
+      <h3 style="font-size:1.1rem">Order details</h3>
+      <p class="note" id="trackPlaceholder">Your order status will appear here.</p>
+    </section>
+  </div>
+</main>
+
+<script src="/assets/track.js?v=2" defer></script>
+</body>
+</html>
