@@ -1,59 +1,22 @@
 /**
- * Seeds the catalogue from the original website content and ensures the
- * administrator account exists. Safe to run on every start:
+ * Seeds the catalogue from the website content and ensures the administrator
+ * account exists. Safe to run on every start:
  *  - existing products keep their price/stock edits,
  *  - the admin password follows the ADMIN_PASSWORD environment variable.
+ *
+ * The catalogue itself is the plain data file data/products.json at the
+ * repository root, so every product (name, price, unit, stock, photo) is
+ * visible and editable in the code. This script only publishes that file into
+ * the database; products edited in the dashboard are never overwritten.
  */
+import { readFileSync } from 'node:fs';
 import bcrypt from 'bcryptjs';
 import { pool, waitForDatabase } from '../src/db.js';
 import { DEFAULT_INSTRUCTIONS } from '../src/lib/payments.js';
 
-const PRODUCTS = [
-  {
-    slug: 'live',
-    name: 'Live Chicken',
-    description: 'Live chickens available for customers seeking whole birds.',
-    category: 'Chicken',
-    unit: 'per bird',
-    price: 800,
-    stock: 20,
-    image: '/assets/products/live.jpg',
-    sort_order: 1,
-  },
-  {
-    slug: 'broiler',
-    name: 'Broiler Chicken',
-    description: 'Broiler chickens available for purchase.',
-    category: 'Chicken',
-    unit: 'per bird',
-    price: 1500,
-    stock: 15,
-    image: '/assets/products/broiler.jpg',
-    sort_order: 2,
-  },
-  {
-    slug: 'chicks',
-    name: 'Chicks',
-    description: 'Chicks available for customers who want to start or grow their flock.',
-    category: 'Chicks',
-    unit: 'per chick',
-    price: 200,
-    stock: 100,
-    image: '/assets/products/chicks.jpg',
-    sort_order: 3,
-  },
-  {
-    slug: 'eggs',
-    name: 'Eggs',
-    description: 'Eggs available for customers, if offered by the business.',
-    category: 'Eggs',
-    unit: 'per tray of 30',
-    price: 360,
-    stock: 40,
-    image: '/assets/products/eggs.jpg',
-    sort_order: 4,
-  },
-];
+const PRODUCTS = JSON.parse(
+  readFileSync(new URL('../../data/products.json', import.meta.url), 'utf8'),
+);
 
 async function main() {
   await waitForDatabase();

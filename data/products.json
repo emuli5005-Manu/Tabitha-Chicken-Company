@@ -1,0 +1,50 @@
+[
+  {
+    "slug": "live",
+    "name": "Live Chicken",
+    "description": "Live chickens available for customers seeking whole birds.",
+    "category": "Chicken",
+    "unit": "per bird",
+    "price": 800,
+    "stock": 20,
+    "image": "/assets/products/live.jpg",
+    "available": true,
+    "sort_order": 1
+  },
+  {
+    "slug": "broiler",
+    "name": "Broiler Chicken",
+    "description": "Broiler chickens available for purchase.",
+    "category": "Chicken",
+    "unit": "per bird",
+    "price": 1500,
+    "stock": 15,
+    "image": "/assets/products/broiler.jpg",
+    "available": true,
+    "sort_order": 2
+  },
+  {
+    "slug": "chicks",
+    "name": "Chicks",
+    "description": "Chicks available for customers who want to start or grow their flock.",
+    "category": "Chicks",
+    "unit": "per chick",
+    "price": 200,
+    "stock": 100,
+    "image": "/assets/products/chicks.jpg",
+    "available": true,
+    "sort_order": 3
+  },
+  {
+    "slug": "eggs",
+    "name": "Eggs",
+    "description": "Eggs available for customers, if offered by the business.",
+    "category": "Eggs",
+    "unit": "per tray of 30",
+    "price": 360,
+    "stock": 40,
+    "image": "/assets/products/eggs.jpg",
+    "available": true,
+    "sort_order": 4
+  }
+]
