@@ -13,7 +13,7 @@
   }[c]));
 
   let products = [];
-  let config = { deliveryFee: 150, business: {} };
+  let config = { deliveryFee: 150, business: {}, payment: { enabled: false } };
   let cart = loadCart();
   let fulfilment = 'delivery';
   let submitting = false;
@@ -106,7 +106,26 @@
           <div class="tcc-field">
             <label for="tccPay">Payment method</label>
             <select id="tccPay" name="payment"></select>
-            <p class="tcc-hint" id="tccPayHint">M-Pesa payments are coming soon. No online payment is taken on this website.</p>
+            <p class="tcc-hint" id="tccPayHint">No online payment is taken on this website.</p>
+          </div>
+          <div class="tcc-mpesa" id="tccMpesa" hidden>
+            <p class="tcc-mpesa-title">Pay with M-Pesa</p>
+            <p class="tcc-mpesa-send">
+              Send <strong id="tccMpesaAmount">KES 0</strong> to
+              <strong id="tccMpesaNumber">—</strong>
+              <span class="tcc-mpesa-name" id="tccMpesaName"></span>
+            </p>
+            <div class="tcc-copy-row">
+              <button class="btn btn-line btn-sm" type="button" id="tccCopyNumber">Copy number</button>
+              <button class="btn btn-line btn-sm" type="button" id="tccCopyAmount">Copy amount</button>
+            </div>
+            <p class="tcc-mpesa-instructions" id="tccMpesaInstructions"></p>
+            <div class="tcc-field">
+              <label for="tccMpesaCode">M-Pesa transaction code</label>
+              <input id="tccMpesaCode" name="mpesaCode" maxlength="12" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="e.g. RJ41K5M2QZ">
+              <div class="err" id="tccErrMpesa"></div>
+            </div>
+            <p class="tcc-hint">We never ask for your M-Pesa PIN. Only the confirmation code from your SMS.</p>
           </div>
         </form>
       </div>
@@ -134,6 +153,9 @@
   const paySelect = $('tccPay');
   const locationWrap = $('tccLocationWrap');
   const locationInput = $('tccLocation');
+  const mpesaPanel = $('tccMpesa');
+  const mpesaCodeInput = $('tccMpesaCode');
+  const payHint = $('tccPayHint');
 
   /* --------------------------------------------------------------- render */
   function renderCart() {
@@ -198,6 +220,7 @@
   function updateTotals() {
     const sub = subtotal();
     const fee = deliveryFee();
+    syncMpesa();
     const rows = `
       <div><span>Subtotal</span><span>${money(sub)}</span></div>
       <div${fee ? '' : ' hidden'}><span>Delivery fee</span><span>${money(fee)}</span></div>
@@ -295,23 +318,85 @@
   });
 
   /* ------------------------------------------------------------ checkout */
+  const paymentCfg = () => config.payment || { enabled: false };
+
   function setPaymentOptions() {
     const delivery = fulfilment === 'delivery';
-    paySelect.innerHTML = delivery
-      ? '<option value="cash_on_delivery">Cash on Delivery</option>'
-      : '<option value="pay_on_collection">Pay on Collection</option>';
-    paySelect.innerHTML += '<option value="mpesa" disabled>M-Pesa (coming soon)</option>';
+    const options = [delivery
+      ? ['cash_on_delivery', 'Cash on Delivery']
+      : ['pay_on_collection', 'Pay on Collection']];
+    if (paymentCfg().enabled) options.push(['mpesa', 'M-Pesa']);
+    paySelect.innerHTML = options
+      .map(([value, label]) => `<option value="${value}">${label}</option>`)
+      .join('');
     locationWrap.hidden = !delivery;
     locationWrap.style.display = delivery ? '' : 'none';
     locationInput.required = delivery;
     updateTotals();
   }
 
+  /** Show the M-Pesa instructions only while M-Pesa is the chosen method. */
+  function syncMpesa() {
+    const cfg = paymentCfg();
+    const active = paySelect.value === 'mpesa' && cfg.enabled;
+    mpesaPanel.hidden = !active;
+    mpesaPanel.style.display = active ? '' : 'none';
+    payHint.textContent = active
+      ? 'Pay with M-Pesa on your phone, then enter the confirmation code below.'
+      : 'No online payment is taken on this website.';
+    if (!active) return;
+
+    const amount = grandTotal();
+    $('tccMpesaNumber').textContent = cfg.mpesaNumberDisplay || cfg.mpesaNumber || '—';
+    $('tccMpesaAmount').textContent = money(amount);
+    $('tccMpesaName').textContent = cfg.accountName ? ` (${cfg.accountName})` : '';
+    $('tccMpesaInstructions').textContent = cfg.instructions || '';
+    mpesaPanel.dataset.number = cfg.mpesaNumber || '';
+    mpesaPanel.dataset.amount = String(Math.round(amount));
+  }
+
+  async function copyText(value, button, doneLabel) {
+    const original = button.textContent;
+    try {
+      await navigator.clipboard.writeText(value);
+      button.textContent = doneLabel;
+    } catch {
+      const box = document.createElement('textarea');
+      box.value = value;
+      box.setAttribute('readonly', '');
+      box.style.position = 'fixed';
+      box.style.opacity = '0';
+      document.body.appendChild(box);
+      box.select();
+      try {
+        document.execCommand('copy');
+        button.textContent = doneLabel;
+      } catch {
+        button.textContent = 'Copy failed';
+      }
+      box.remove();
+    }
+    setTimeout(() => { button.textContent = original; }, 2200);
+  }
+
+  $('tccCopyNumber').addEventListener('click', () => {
+    copyText(mpesaPanel.dataset.number || '', $('tccCopyNumber'), 'Number copied');
+  });
+  $('tccCopyAmount').addEventListener('click', () => {
+    copyText(mpesaPanel.dataset.amount || '', $('tccCopyAmount'), 'Amount copied');
+  });
+
+  mpesaCodeInput.addEventListener('input', () => {
+    mpesaCodeInput.value = mpesaCodeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
+    fieldError('tccErrMpesa', '');
+  });
+
   form.addEventListener('change', (event) => {
     if (event.target.name === 'fulfilment') {
       fulfilment = event.target.value;
       setPaymentOptions();
     }
+    if (event.target === paySelect) syncMpesa();
   });
 
   function fieldError(id, message) {
@@ -323,7 +408,7 @@
   }
 
   function clearErrors() {
-    ['tccErrName', 'tccErrPhone', 'tccErrEmail', 'tccErrLocation'].forEach((id) => fieldError(id, ''));
+    ['tccErrName', 'tccErrPhone', 'tccErrEmail', 'tccErrLocation', 'tccErrMpesa'].forEach((id) => fieldError(id, ''));
     feedback.className = 'tcc-feedback';
     feedback.textContent = '';
   }
@@ -341,6 +426,8 @@
 
   const validPhone = (value) => /^(?:\+?254|0)?[17]\d{8}$/.test(String(value).replace(/[\s-]/g, ''));
   const validEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value);
+  // Safaricom confirmation codes look like RJ41K5M2QZ: 8-12 letters and digits.
+  const validMpesaCode = (value) => /^[A-Z0-9]{8,12}$/.test(value) && /[A-Z]/.test(value) && /\d/.test(value);
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -359,12 +446,17 @@
     const location = $('tccLocation').value.trim();
     const notes = $('tccNotes').value.trim();
     const paymentMethod = paySelect.value;
+    const mpesaCode = mpesaCodeInput.value.trim().toUpperCase();
 
     let ok = true;
     if (name.length < 2) { fieldError('tccErrName', 'Enter your full name.'); ok = false; }
     if (!validPhone(phone)) { fieldError('tccErrPhone', 'Enter a valid phone number, for example 0712 345 678.'); ok = false; }
     if (email && !validEmail(email)) { fieldError('tccErrEmail', 'Enter a valid email address or leave it blank.'); ok = false; }
     if (fulfilment === 'delivery' && location.length < 3) { fieldError('tccErrLocation', 'Where should we deliver your order?'); ok = false; }
+    if (paymentMethod === 'mpesa' && !validMpesaCode(mpesaCode)) {
+      fieldError('tccErrMpesa', 'Enter the M-Pesa confirmation code from your SMS, for example RJ41K5M2QZ.');
+      ok = false;
+    }
     if (!ok) {
       showFeedback('Please fix the highlighted fields and try again.');
       return;
@@ -382,6 +474,7 @@
           deliveryLocation: location,
           notes,
           paymentMethod,
+          mpesaCode: paymentMethod === 'mpesa' ? mpesaCode : undefined,
           idempotencyKey,
         }),
       });
@@ -392,6 +485,8 @@
           if (data.fields.phone) fieldError('tccErrPhone', data.fields.phone);
           if (data.fields.email) fieldError('tccErrEmail', data.fields.email);
           if (data.fields.location) fieldError('tccErrLocation', data.fields.location);
+          if (data.fields.mpesaCode) fieldError('tccErrMpesa', data.fields.mpesaCode);
+          if (data.fields.paymentMethod) payHint.textContent = data.fields.paymentMethod;
         }
         throw new Error(data.error || 'We could not place your order. Please try again.');
       }
@@ -401,6 +496,7 @@
       idempotencyKey = newId();
       saveCart();
       form.reset();
+      mpesaCodeInput.value = '';
       fulfilment = 'delivery';
       setPaymentOptions();
       await loadProducts();
@@ -422,27 +518,38 @@
       localStorage.setItem(LAST_ORDER_KEY, JSON.stringify({ orderNo: order.orderNo, at: new Date().toISOString() }));
     } catch { /* ignore */ }
 
+    const isMpesa = order.paymentMethod === 'mpesa';
+    const intro = isMpesa
+      ? 'Your order has been received successfully. Your M-Pesa payment is awaiting verification. We will confirm your payment and order shortly.'
+      : `Thank you ${esc(order.customerName)}. Your order has been received and is waiting for confirmation.`;
+    const payLine = isMpesa
+      ? `<div><span>M-Pesa code</span><span>${esc(order.mpesaCode || '—')}</span></div>
+         <div><span>Payment status</span><span>Awaiting verification</span></div>`
+      : '';
     confirmEl.innerHTML = `
       <div class="tcc-confirm-card">
         <div class="tcc-tick" aria-hidden="true">✓</div>
         <div>
           <h2 id="tccConfirmTitle">Order received</h2>
-          <p class="note" style="margin-top:.35rem">Thank you, ${esc(order.customerName)}. Your order is saved and waiting for confirmation.</p>
+          <p class="note" style="margin-top:.35rem">${esc(intro)}</p>
         </div>
         <div class="tcc-ref">
           <span>Order reference</span>
           <strong id="tccRef">${esc(order.orderNo)}</strong>
         </div>
-        <div><span class="tcc-status-pill"><span aria-hidden="true">●</span> Pending confirmation</span></div>
+        <div><span class="tcc-status-pill"><span aria-hidden="true">●</span> ${isMpesa ? 'Payment awaiting verification' : 'Pending confirmation'}</span></div>
         <div class="tcc-confirm-list">
           ${items.map((i) => `<div><span>${esc(i.name)} × ${i.quantity}</span><span>${money(i.lineTotal)}</span></div>`).join('')}
           <div><span>Subtotal</span><span>${money(order.subtotal)}</span></div>
           <div><span>Delivery fee</span><span>${money(order.deliveryFee)}</span></div>
           <div class="tcc-grand"><span>Total</span><span>${money(order.total)}</span></div>
+          ${payLine}
         </div>
-        <p class="note">Send this order on WhatsApp so we can confirm it. It stays <strong>pending</strong> until we reply.</p>
+        <p class="note">${isMpesa
+          ? 'We check your M-Pesa code against our statement, then confirm the order on WhatsApp. Keep your reference handy.'
+          : 'Send this order on WhatsApp so we can confirm it. It stays <strong>pending</strong> until we reply.'}</p>
         <div class="tcc-confirm-actions">
-          <a class="btn btn-wa" id="tccWaLink" href="${esc(data.whatsappUrl)}" target="_blank" rel="noopener">Send order on WhatsApp</a>
+          <a class="btn btn-wa" id="tccWaLink" href="${esc(data.whatsappUrl)}" target="_blank" rel="noopener">${isMpesa ? 'Contact us on WhatsApp' : 'Send order on WhatsApp'}</a>
           <button class="btn btn-line" type="button" id="tccCopy" style="border-color:var(--forest);color:var(--forest)">Copy order details</button>
           <a class="btn btn-line" id="tccTrackLink" href="/track?order=${encodeURIComponent(order.orderNo)}" style="border-color:var(--forest);color:var(--forest)">Track this order</a>
           <button class="btn" type="button" id="tccDone" style="background:var(--cream);color:var(--ink)">Continue browsing</button>
@@ -512,6 +619,8 @@
       const res = await fetch('/api/config', { headers: { Accept: 'application/json' } });
       if (res.ok) config = await res.json();
     } catch { /* defaults are fine */ }
+    // The M-Pesa option only appears once we know payments are enabled.
+    setPaymentOptions();
     await loadProducts();
     updateTotals();
   }

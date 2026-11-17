@@ -14,9 +14,19 @@
     cancelled: 'Cancelled',
   };
   const STATUSES = Object.keys(LABELS);
+  const PAY_LABELS = {
+    awaiting_payment: 'Awaiting Payment',
+    payment_submitted: 'Payment Submitted',
+    verification_required: 'Verification Required',
+    paid: 'Paid',
+    failed: 'Failed',
+    refunded: 'Refunded',
+  };
   const VIEW_TITLES = {
     overview: 'Overview',
     orders: 'Orders',
+    payments: 'Payment verification',
+    paySettings: 'Payment settings',
     products: 'Products',
     customers: 'Customers',
     reports: 'Reports',
@@ -30,7 +40,7 @@
     day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Nairobi',
   });
   const statusPill = (s) => `<span class="pill pill-${esc(s)}">${esc(LABELS[s] || s)}</span>`;
-  const payPill = (s) => `<span class="pill pill-${esc(s)}">${esc(s)}</span>`;
+  const payPill = (s) => `<span class="pill pill-${esc(s)}">${esc(PAY_LABELS[s] || s)}</span>`;
 
   const $ = (id) => document.getElementById(id);
   const viewEl = $('view');
@@ -191,6 +201,8 @@
     const renderers = {
       overview: renderOverview,
       orders: renderOrders,
+      payments: renderPayments,
+      paySettings: renderPaymentSettings,
       products: renderProducts,
       customers: renderCustomers,
       reports: renderReports,
@@ -210,6 +222,7 @@
       <div class="cards">
         <div class="stat"><span>Total orders</span><strong>${stats.total_orders}</strong></div>
         <div class="stat accent"><span>Pending</span><strong>${stats.pending}</strong><p class="note">Awaiting confirmation</p></div>
+        <div class="stat accent"><span>Payments to verify</span><strong>${stats.payments_to_verify}</strong><p class="note">M-Pesa codes submitted</p></div>
         <div class="stat"><span>Confirmed</span><strong>${stats.confirmed}</strong></div>
         <div class="stat"><span>Completed</span><strong>${stats.completed}</strong></div>
         <div class="stat"><span>Cancelled</span><strong>${stats.cancelled}</strong></div>
@@ -344,6 +357,22 @@
     try {
       const { order } = await api(`/orders/${id}`);
       const canEdit = Boolean(admin);
+      const needsMpesaCheck = order.paymentMethod === 'mpesa' && order.paymentStatus !== 'paid';
+      const payActions = !canEdit
+        ? ''
+        : (needsMpesaCheck
+          ? '<div class="status-actions" id="payActions">'
+            + '<button type="button" data-pay-action="verify">Verify &amp; mark paid</button>'
+            + '<button type="button" data-pay-action="flag">Needs review</button>'
+            + '<button type="button" data-pay-action="reject">Reject payment</button>'
+            + '</div>'
+            + '<label for="payNote" style="margin-top:.7rem">Internal payment note (staff only)</label>'
+            + '<textarea id="payNote" rows="2" placeholder="e.g. Found on the M-Pesa statement at 14:22"></textarea>'
+          : '<div class="status-actions" id="payActions">'
+            + ['awaiting_payment', 'paid', 'failed']
+              .map((p) => `<button type="button" data-pay="${p}" ${p === order.paymentStatus ? 'class="current" disabled' : ''}>${PAY_LABELS[p]}</button>`)
+              .join('')
+            + '</div>');
       const body = `
         <div class="grid-2">
           <div>
@@ -365,7 +394,6 @@
               <div><span>Method</span><span>${order.fulfilment === 'delivery' ? 'Delivery' : 'Collection'}</span></div>
               <div><span>Location</span><span>${esc(order.deliveryLocation || '—')}</span></div>
               <div><span>Payment</span><span>${esc(order.paymentMethod.replace(/_/g, ' '))}</span></div>
-              <div><span>Payment status</span><span>${payPill(order.paymentStatus)}</span></div>
             </div>
             ${order.notes ? `<p class="section-title" style="margin-top:.8rem">Instructions</p><p class="note">${esc(order.notes)}</p>` : ''}
           </div>
@@ -394,10 +422,15 @@
         </div>
 
         <div>
-          <p class="section-title">Payment status</p>
-          <div class="status-actions" id="payActions">
-            ${['unpaid', 'paid', 'refunded'].map((p) => `<button type="button" data-pay="${p}" ${p === order.paymentStatus ? 'class="current" disabled' : ''}>${p}</button>`).join('')}
+          <p class="section-title">Payment</p>
+          <div class="kv">
+            <div><span>Status</span><span>${payPill(order.paymentStatus)}</span></div>
+            ${order.mpesaCode ? `<div><span>M-Pesa code</span><span><strong>${esc(order.mpesaCode)}</strong></span></div>` : ''}
+            ${order.paymentReceivingNumber ? `<div><span>Sent to</span><span>${esc(order.paymentReceivingNumber)}</span></div>` : ''}
+            ${order.paymentVerifiedAt ? `<div><span>Checked</span><span>${esc(fmtDateTime(order.paymentVerifiedAt))} · ${esc(order.paymentVerifiedBy || '')}</span></div>` : ''}
           </div>
+          ${order.paymentNote ? `<pre class="payment-note">${esc(order.paymentNote)}</pre>` : ''}
+          ${payActions}
         </div>
 
         <div>
@@ -432,20 +465,206 @@
         }
       });
     });
+    const refreshAfterPayment = () => {
+      closeModal();
+      openOrder(order.id);
+      if (['overview', 'orders', 'payments'].includes(currentView)) loadView(currentView);
+    };
+
     modalRoot.querySelectorAll('#payActions button[data-pay]').forEach((button) => {
       button.addEventListener('click', async () => {
         button.disabled = true;
         try {
           await api(`/orders/${order.id}`, { method: 'PATCH', body: JSON.stringify({ payment_status: button.dataset.pay }) });
-          toast(`Payment marked ${button.dataset.pay}.`);
-          closeModal();
-          openOrder(order.id);
-          if (currentView === 'overview' || currentView === 'orders') loadView(currentView);
+          toast(`Payment marked ${PAY_LABELS[button.dataset.pay]}.`);
+          refreshAfterPayment();
         } catch (err) {
           toast(err.message);
           button.disabled = false;
         }
       });
+    });
+
+    modalRoot.querySelectorAll('#payActions button[data-pay-action]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const action = button.dataset.payAction;
+        const note = modalRoot.querySelector('#payNote')?.value.trim() || '';
+        if (action === 'reject' && note.length < 3 && !window.confirm('Reject this payment without a reason note?')) return;
+        button.disabled = true;
+        try {
+          await api(`/orders/${order.id}/payment`, {
+            method: 'POST',
+            body: JSON.stringify({ action, note }),
+          });
+          toast({
+            verify: `Payment verified - ${order.orderNo} marked paid.`,
+            reject: 'Payment rejected and recorded.',
+            flag: 'Payment marked for review.',
+          }[action]);
+          refreshAfterPayment();
+        } catch (err) {
+          toast(err.message);
+          button.disabled = false;
+        }
+      });
+    });
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
+  /* -------------------------------------------------- payment verification */
+  async function renderPayments(scope = 'open') {
+    const data = await api(`/payments?scope=${encodeURIComponent(scope)}`);
+    const c = data.counts;
+    const canVerify = admin?.role === 'admin';
+    viewEl.innerHTML = `
+      <div class="cards">
+        <div class="stat accent"><span>Awaiting payment</span><strong>${c.awaiting_payment}</strong><p class="note">M-Pesa orders, no code yet</p></div>
+        <div class="stat accent"><span>Codes to check</span><strong>${c.payment_submitted}</strong><p class="note">Submitted by customers</p></div>
+        <div class="stat"><span>Needs review</span><strong>${c.verification_required}</strong></div>
+        <div class="stat"><span>Value submitted</span><strong>${money(c.submitted_value)}</strong></div>
+        <div class="stat"><span>Verified paid</span><strong>${c.paid}</strong></div>
+        <div class="stat"><span>Failed</span><strong>${c.failed}</strong></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>M-Pesa payments</h2>
+            <p class="note">Compare each code and amount with the M-Pesa SMS or statement before marking it paid.</p>
+          </div>
+          <div class="status-actions" id="payScope">
+            <button type="button" data-scope="open" class="${scope === 'open' ? 'current' : ''}">To verify</button>
+            <button type="button" data-scope="all" class="${scope === 'all' ? 'current' : ''}">All M-Pesa orders</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Order</th><th>Customer</th><th>M-Pesa code</th><th class="num">Amount</th><th>Submitted</th><th>Payment status</th><th></th></tr></thead>
+            <tbody>
+              ${data.payments.length ? data.payments.map((p) => `
+                <tr>
+                  <td><strong>${esc(p.order_no)}</strong><br><span class="note">${esc(fmtDateTime(p.created_at))}</span></td>
+                  <td>${esc(p.customer_name)}<br><span class="note">${esc(p.customer_phone)}</span></td>
+                  <td>${p.mpesa_code ? `<strong>${esc(p.mpesa_code)}</strong>` : '<span class="note">Not provided yet</span>'}</td>
+                  <td class="num">${money(p.total)}</td>
+                  <td>${esc(fmtDateTime(p.created_at))}</td>
+                  <td>${payPill(p.payment_status)}</td>
+                  <td class="num">
+                    <button class="btn btn-line btn-sm" type="button" data-order="${p.id}">${canVerify ? 'Check payment' : 'View'}</button>
+                  </td>
+                </tr>`).join('')
+                : '<tr class="empty-row"><td colspan="7">No M-Pesa payments waiting. New ones appear here as customers pay.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+        ${canVerify ? '' : '<p class="note" style="padding:.8rem 1rem">Only an administrator can mark a payment as paid.</p>'}
+      </div>`;
+
+    viewEl.querySelectorAll('#payScope [data-scope]').forEach((button) => {
+      button.addEventListener('click', () => renderPayments(button.dataset.scope).catch((err) => toast(err.message)));
+    });
+    viewEl.querySelectorAll('[data-order]').forEach((button) => {
+      button.addEventListener('click', () => openOrder(Number(button.dataset.order)));
+    });
+  }
+
+  /* ----------------------------------------------------- payment settings */
+  async function renderPaymentSettings() {
+    const { settings } = await api('/payment-settings');
+    const canManage = admin?.role === 'admin';
+    viewEl.innerHTML = `
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>M-Pesa receiving details</h2>
+            <p class="note">These details are shown to customers who choose M-Pesa at checkout.</p>
+          </div>
+          ${settings.verified
+            ? `<span class="pill pill-paid">Verified ${esc(fmtDateTime(settings.verifiedAt))}</span>`
+            : '<span class="pill pill-verification_required">Not verified yet</span>'}
+        </div>
+        <div class="panel-body">
+          <form id="paySettingsForm" novalidate>
+            <div class="grid-2">
+              <div>
+                <label for="psNumber">M-Pesa number that receives payments</label>
+                <input id="psNumber" value="${esc(settings.mpesaNumber)}" inputmode="tel" placeholder="0726 777 924">
+                <div class="err" id="psErrNumber"></div>
+              </div>
+              <div>
+                <label for="psName">Account holder name</label>
+                <input id="psName" value="${esc(settings.accountName)}" placeholder="Name registered on the M-Pesa line">
+                <div class="err" id="psErrName"></div>
+              </div>
+            </div>
+            <div style="margin-top:.9rem">
+              <label for="psInstructions">Payment instructions shown to customers</label>
+              <textarea id="psInstructions" rows="4">${esc(settings.instructions)}</textarea>
+              <p class="note">Never ask customers for their M-Pesa PIN - the website never collects it.</p>
+            </div>
+            <div style="margin-top:.9rem">
+              <label for="psEnabled">M-Pesa availability</label>
+              <select id="psEnabled">
+                <option value="true" ${settings.enabled ? 'selected' : ''}>Available at checkout</option>
+                <option value="false" ${!settings.enabled ? 'selected' : ''}>Turned off</option>
+              </select>
+            </div>
+          </form>
+        </div>
+        <div class="panel-foot" style="display:flex;gap:.5rem;flex-wrap:wrap">
+          <button class="btn btn-green btn-sm" type="button" id="psSave" ${canManage ? '' : 'disabled'}>Save details</button>
+          <button class="btn btn-line btn-sm" type="button" id="psVerify" ${canManage && !settings.verified ? '' : 'disabled'}>I checked this number - mark verified</button>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>What customers see</h2></div>
+        <div class="panel-body">
+          <div class="kv">
+            <div><span>Send to</span><span>${esc(settings.mpesaNumberDisplay)}${settings.accountName ? ` · ${esc(settings.accountName)}` : ''}</span></div>
+            <div><span>Availability</span><span>${settings.enabled ? 'Shown at checkout' : 'Hidden from checkout'}</span></div>
+            <div><span>Last updated</span><span>${esc(fmtDateTime(settings.updatedAt))}</span></div>
+          </div>
+          <p class="note" style="margin-top:.7rem">${esc(settings.instructions)}</p>
+          <p class="note" style="margin-top:.6rem">Payments are checked against your M-Pesa statement - customers enter the confirmation code and you mark the order paid.</p>
+        </div>
+      </div>`;
+
+    if (!canManage) return;
+
+    const save = async () => {
+      const payload = {
+        mpesaNumber: $('psNumber').value.trim(),
+        accountName: $('psName').value.trim(),
+        instructions: $('psInstructions').value.trim(),
+        enabled: $('psEnabled').value === 'true',
+      };
+      $('psErrNumber').textContent = '';
+      $('psErrName').textContent = '';
+      const button = $('psSave');
+      button.disabled = true;
+      button.textContent = 'Saving…';
+      try {
+        const data = await api('/payment-settings', { method: 'PUT', body: JSON.stringify(payload) });
+        toast(data.numberChanged ? 'Saved. Verify the new number again.' : 'Payment details saved.');
+        renderPaymentSettings();
+      } catch (err) {
+        if (err.fields?.mpesaNumber) $('psErrNumber').textContent = err.fields.mpesaNumber;
+        if (err.fields?.accountName) $('psErrName').textContent = err.fields.accountName;
+        toast(err.message);
+        button.disabled = false;
+        button.textContent = 'Save details';
+      }
+    };
+    $('psSave').addEventListener('click', save);
+    $('psVerify').addEventListener('click', async () => {
+      try {
+        await api('/payment-settings/verify', { method: 'POST' });
+        toast('M-Pesa number marked verified.');
+        renderPaymentSettings();
+      } catch (err) {
+        toast(err.message);
+      }
     });
   }
 

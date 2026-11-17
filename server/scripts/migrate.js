@@ -85,6 +85,37 @@ CREATE TABLE IF NOT EXISTS admins (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS payment_settings (
+  id            INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  mpesa_number  TEXT NOT NULL DEFAULT '',
+  account_name  TEXT NOT NULL DEFAULT '',
+  instructions  TEXT NOT NULL DEFAULT '',
+  enabled       BOOLEAN NOT NULL DEFAULT TRUE,
+  verified_at   TIMESTAMPTZ,
+  verified_by   TEXT,
+  updated_by    TEXT,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+/* --- manual M-Pesa payments on existing installs ------------------------- */
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS mpesa_code TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_receiving_number TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_note TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_verified_at TIMESTAMPTZ;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_verified_by TEXT;
+
+UPDATE orders SET payment_status = 'awaiting_payment' WHERE payment_status = 'unpaid';
+
+ALTER TABLE orders ALTER COLUMN payment_status SET DEFAULT 'awaiting_payment';
+ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_payment_status_check;
+ALTER TABLE orders ADD CONSTRAINT orders_payment_status_check
+  CHECK (payment_status IN ('awaiting_payment','payment_submitted','verification_required',
+                            'paid','failed','refunded'));
+
+-- One order per transaction code: stops the same M-Pesa payment being claimed twice.
+CREATE UNIQUE INDEX IF NOT EXISTS orders_mpesa_code_uidx
+  ON orders (upper(mpesa_code)) WHERE mpesa_code IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS orders_created_at_idx ON orders (created_at DESC);
 CREATE INDEX IF NOT EXISTS orders_status_idx ON orders (status);
 CREATE INDEX IF NOT EXISTS orders_customer_idx ON orders (customer_id);

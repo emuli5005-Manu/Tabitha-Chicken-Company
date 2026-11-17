@@ -6,6 +6,7 @@
  */
 import bcrypt from 'bcryptjs';
 import { pool, waitForDatabase } from '../src/db.js';
+import { DEFAULT_INSTRUCTIONS } from '../src/lib/payments.js';
 
 const PRODUCTS = [
   {
@@ -85,6 +86,18 @@ async function main() {
     );
     console.log(`[seed] administrator ${email} is ready`);
   }
+
+  // M-Pesa receiving details start from the business contact number; the owner
+  // edits and verifies them in the dashboard. Never overwritten once it exists.
+  const rawNumber = String(process.env.BUSINESS_WHATSAPP || '254726777924').replace(/\D/g, '');
+  const localNumber = rawNumber.startsWith('254') ? `0${rawNumber.slice(3)}` : rawNumber;
+  await pool.query(
+    `INSERT INTO payment_settings (id, mpesa_number, account_name, instructions, enabled)
+     VALUES (1, $1, $2, $3, TRUE)
+     ON CONFLICT (id) DO NOTHING`,
+    [localNumber, process.env.BUSINESS_NAME || 'Tabitha Chicken Company', DEFAULT_INSTRUCTIONS],
+  );
+  console.log('[seed] M-Pesa payment settings ready');
 
   await pool.end();
 }

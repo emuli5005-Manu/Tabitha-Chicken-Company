@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { query } from '../db.js';
-import { BUSINESS, ORDER_STATUSES, PAYMENT_METHODS, STATUS_LABELS } from '../lib/business.js';
+import { BUSINESS, ORDER_STATUSES, PAYMENT_METHODS, PAYMENT_STATUS_LABELS, STATUS_LABELS } from '../lib/business.js';
 import { buildOrderMessage } from '../lib/business.js';
 import { buildWhatsappLink, buildWhatsappMessage, createOrder, loadOrder } from '../lib/orders.js';
+import { loadPaymentSettings, publicPayment } from '../lib/payments.js';
 import { HttpError, normPhone, text } from '../lib/validate.js';
 
 const router = Router();
@@ -24,20 +25,30 @@ setInterval(() => {
   for (const [key, entry] of hits) if (now - entry.start > 3600_000) hits.delete(key);
 }, 600_000).unref();
 
-router.get('/config', (req, res) => {
-  res.json({
-    business: {
-      name: BUSINESS.name,
-      whatsapp: BUSINESS.whatsapp,
-      phoneDisplay: BUSINESS.phoneDisplay,
-      email: BUSINESS.email,
-      location: BUSINESS.location,
-      hours: BUSINESS.hours,
-    },
-    deliveryFee: BUSINESS.deliveryFee,
-    statuses: ORDER_STATUSES.map((value) => ({ value, label: STATUS_LABELS[value] })),
-    paymentMethods: Object.entries(PAYMENT_METHODS).map(([value, label]) => ({ value, label })),
-  });
+router.get('/config', async (req, res, next) => {
+  try {
+    const settings = await loadPaymentSettings();
+    const payment = publicPayment(settings);
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      business: {
+        name: BUSINESS.name,
+        whatsapp: BUSINESS.whatsapp,
+        phoneDisplay: BUSINESS.phoneDisplay,
+        email: BUSINESS.email,
+        location: BUSINESS.location,
+        hours: BUSINESS.hours,
+      },
+      deliveryFee: BUSINESS.deliveryFee,
+      statuses: ORDER_STATUSES.map((value) => ({ value, label: STATUS_LABELS[value] })),
+      paymentMethods: Object.entries(PAYMENT_METHODS)
+        .filter(([value]) => value !== 'mpesa' || payment.enabled)
+        .map(([value, label]) => ({ value, label })),
+      payment,
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 router.get('/products', async (req, res, next) => {
@@ -112,6 +123,9 @@ router.post('/orders/track', async (req, res, next) => {
         total: order.total,
         paymentMethod: order.paymentMethod,
         paymentStatus: order.paymentStatus,
+        paymentStatusLabel: PAYMENT_STATUS_LABELS[order.paymentStatus] || order.paymentStatus,
+        mpesaCode: order.mpesaCode,
+        paymentVerifiedAt: order.paymentVerifiedAt,
         createdAt: order.createdAt,
         items: order.items,
         history: order.history,

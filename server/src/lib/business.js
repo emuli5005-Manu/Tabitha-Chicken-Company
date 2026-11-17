@@ -36,7 +36,31 @@ export const PAYMENT_METHODS = {
   mpesa: 'M-Pesa',
 };
 
-export const PAYMENT_STATUSES = ['unpaid', 'paid', 'refunded'];
+/**
+ * Manual M-Pesa payments are confirmed by the owner against the M-Pesa
+ * statement, so a customer submitting a code only moves an order as far as
+ * "Payment Submitted". "Paid" is set by an administrator only.
+ */
+export const PAYMENT_STATUSES = [
+  'awaiting_payment',
+  'payment_submitted',
+  'verification_required',
+  'paid',
+  'failed',
+  'refunded',
+];
+
+export const PAYMENT_STATUS_LABELS = {
+  awaiting_payment: 'Awaiting Payment',
+  payment_submitted: 'Payment Submitted',
+  verification_required: 'Verification Required',
+  paid: 'Paid',
+  failed: 'Failed',
+  refunded: 'Refunded',
+};
+
+/** Statuses that still need the administrator to look at the money. */
+export const OPEN_PAYMENT_STATUSES = ['awaiting_payment', 'payment_submitted', 'verification_required'];
 
 export const money = (value) =>
   Number(value).toLocaleString('en-KE', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
@@ -46,32 +70,30 @@ export const waUrl = (text) =>
 
 /** Prefilled WhatsApp message that the shop receives for a new order. */
 export function buildOrderMessage(order, items) {
+  const isMpesa = order.payment_method === 'mpesa';
   const lines = [
     BUSINESS.name.toUpperCase(),
-    'NEW CUSTOMER ORDER',
+    '',
+    'NEW ORDER',
     '',
     `Order Reference: ${order.order_no}`,
+    `Customer: ${order.customer_name}`,
+    `Phone: ${order.customer_phone}`,
     '',
-    `Customer Name: ${order.customer_name}`,
-    `Phone Number: ${order.customer_phone}`,
-  ];
-  if (order.customer_email) lines.push(`Email: ${order.customer_email}`);
-  lines.push('', 'ORDER DETAILS:');
-  for (const item of items) {
-    lines.push(`${item.name} × ${item.quantity} = KES ${money(item.line_total)}`);
-  }
-  lines.push(
+    'Products:',
+    ...items.map((item) => `${item.name} × ${item.quantity} = KES ${money(item.line_total)}`),
     '',
-    `Subtotal: KES ${money(order.subtotal)}`,
-    `Delivery Fee: KES ${money(order.delivery_fee)}`,
-    `TOTAL: KES ${money(order.total)}`,
+    `Total: KES ${money(order.total)}`,
     '',
-    `Fulfilment: ${order.fulfilment === 'delivery' ? 'Delivery' : 'Collection'}`,
-    `Delivery Location: ${order.delivery_location || 'N/A'}`,
-    `Customer Instructions: ${order.notes || 'None'}`,
     `Payment Method: ${PAYMENT_METHODS[order.payment_method] || order.payment_method}`,
-    '',
-    'Thank you for choosing Tabitha Chicken Company!',
-  );
+  ];
+  if (isMpesa) {
+    lines.push(`Transaction Code: ${order.mpesa_code || 'Not provided'}`);
+    lines.push('Payment Status: Awaiting Verification');
+  } else {
+    lines.push(`Payment Status: ${PAYMENT_STATUS_LABELS[order.payment_status] || 'Awaiting Payment'}`);
+  }
+  lines.push('', `Delivery Location: ${order.delivery_location || 'N/A'}`);
+  if (order.notes) lines.push(`Customer Instructions: ${order.notes}`);
   return lines.join('\n');
 }
