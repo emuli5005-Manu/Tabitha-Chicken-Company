@@ -5,13 +5,20 @@ import path from 'node:path';
 import multer from 'multer';
 import { endSession, issueSession, requireAdmin, requireRole } from '../auth.js';
 import { query, withTransaction } from '../db.js';
-import { STATUS_LABELS } from '../lib/business.js';
+import {
+  OPEN_PAYMENT_STATUSES,
+  PAYMENT_STATUSES,
+  PAYMENT_STATUS_LABELS,
+  STATUS_LABELS,
+} from '../lib/business.js';
 import { loadOrder } from '../lib/orders.js';
+import { loadPaymentSettings, serializeSettings } from '../lib/payments.js';
 import {
   HttpError,
   badRequest,
   email,
   multiline,
+  normPhone,
   oneOf,
   positiveInt,
   slugify,
@@ -79,7 +86,8 @@ router.get('/overview', requireAdmin, async (req, res, next) => {
              count(*) FILTER (WHERE status = 'completed')::int AS completed,
              count(*) FILTER (WHERE status = 'cancelled')::int AS cancelled,
              coalesce(sum(total) FILTER (WHERE status = 'completed'), 0)::float8 AS completed_sales,
-             coalesce(sum(total) FILTER (WHERE status NOT IN ('completed','cancelled')), 0)::float8 AS open_value
+             coalesce(sum(total) FILTER (WHERE status NOT IN ('completed','cancelled')), 0)::float8 AS open_value,
+             count(*) FILTER (WHERE payment_status IN ('payment_submitted','verification_required'))::int AS payments_to_verify
         FROM orders`);
     const { rows: recent } = await query(`
       SELECT id, order_no, customer_name, customer_phone, total::float8 AS total,
@@ -196,9 +204,12 @@ router.patch('/orders/:id', requireAdmin, async (req, res, next) => {
     if (hasPayment) {
       const paymentStatus = oneOf(
         req.body.payment_status ?? req.body.paymentStatus,
-        ['unpaid', 'paid', 'refunded'],
+        PAYMENT_STATUSES,
         'payment_status',
       );
+      if (paymentStatus === 'paid' && req.admin.role !== 'admin') {
+        throw new HttpError(403, 'Only an administrator can mark an order as paid.');
+      }
       await withTransaction(async (client) => {
         const { rows } = await client.query('SELECT id FROM orders WHERE id = $1 FOR UPDATE', [id]);
         if (!rows[0]) throw new HttpError(404, 'Order not found.');
@@ -212,6 +223,200 @@ router.patch('/orders/:id', requireAdmin, async (req, res, next) => {
     }
 
     res.json({ order: await loadOrder(id) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* ---------- manual M-Pesa payment verification ---------- */
+const PAYMENT_QUEUE_COLUMNS = `id, order_no, customer_name, customer_phone, total::float8 AS total,
+  fulfilment, delivery_location, payment_method, payment_status, mpesa_code,
+  payment_receiving_number, payment_note, payment_verified_at, payment_verified_by, created_at`;
+
+router.get('/payments', requireAdmin, async (req, res, next) => {
+  try {
+    const scope = text(req.query.scope, 20) || 'open';
+    const search = text(req.query.search, 80);
+    const where = ["payment_method = 'mpesa'"];
+    const params = [];
+    if (scope !== 'all') {
+      params.push(OPEN_PAYMENT_STATUSES);
+      where.push(`payment_status = ANY($${params.length}::text[])`);
+    }
+    if (search) {
+      params.push(`%${search}%`);
+      where.push(`(order_no ILIKE $${params.length} OR customer_name ILIKE $${params.length}
+                   OR customer_phone ILIKE $${params.length} OR coalesce(mpesa_code, '') ILIKE $${params.length})`);
+    }
+    const { rows } = await query(
+      `SELECT ${PAYMENT_QUEUE_COLUMNS} FROM orders
+        WHERE ${where.join(' AND ')}
+        ORDER BY created_at DESC LIMIT 200`,
+      params,
+    );
+    const { rows: counts } = await query(`
+      SELECT count(*) FILTER (WHERE payment_status = 'awaiting_payment')::int AS awaiting_payment,
+             count(*) FILTER (WHERE payment_status = 'payment_submitted')::int AS payment_submitted,
+             count(*) FILTER (WHERE payment_status = 'verification_required')::int AS verification_required,
+             count(*) FILTER (WHERE payment_status = 'paid')::int AS paid,
+             count(*) FILTER (WHERE payment_status = 'failed')::int AS failed,
+             coalesce(sum(total) FILTER (WHERE payment_status IN ('payment_submitted','verification_required')), 0)::float8 AS submitted_value
+        FROM orders WHERE payment_method = 'mpesa'`);
+    res.json({
+      scope,
+      payments: rows,
+      counts: counts[0],
+      labels: PAYMENT_STATUS_LABELS,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Verify, reject or annotate a customer-submitted M-Pesa payment. */
+router.post('/orders/:id/payment', requireAdmin, requireRole('admin'), async (req, res, next) => {
+  try {
+    const id = positiveInt(req.params.id, { field: 'order' });
+    const action = oneOf(req.body?.action, ['verify', 'reject', 'flag', 'note'], 'action');
+    const note = multiline(req.body?.note, 500);
+
+    if (action === 'reject' && note.length < 3) {
+      throw badRequest('Say why the payment was rejected - the note is kept with the order.', {
+        note: 'Add a short reason, for example "Code not found in the M-Pesa statement".',
+      });
+    }
+
+    const updated = await withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `SELECT id, order_no, status, payment_method, payment_status, mpesa_code, payment_note
+           FROM orders WHERE id = $1 FOR UPDATE`,
+        [id],
+      );
+      const order = rows[0];
+      if (!order) throw new HttpError(404, 'Order not found.');
+      if (order.payment_method !== 'mpesa' && action !== 'note') {
+        throw badRequest('This order is not paid by M-Pesa.');
+      }
+      if (action === 'verify' && order.payment_method === 'mpesa' && !order.mpesa_code) {
+        throw badRequest('There is no M-Pesa transaction code on this order yet.');
+      }
+
+      const notes = notesFor(action, order, note);
+      if (action === 'verify') {
+        await client.query(
+          `UPDATE orders SET payment_status = 'paid', payment_verified_at = now(),
+                  payment_verified_by = $2, payment_note = $3, updated_at = now()
+            WHERE id = $1`,
+          [id, req.admin.email, nextPaymentNote(order.payment_note, notes.history)],
+        );
+      } else if (action === 'reject') {
+        await client.query(
+          `UPDATE orders SET payment_status = 'failed', payment_verified_at = now(),
+                  payment_verified_by = $2, payment_note = $3, updated_at = now()
+            WHERE id = $1`,
+          [id, req.admin.email, nextPaymentNote(order.payment_note, notes.history)],
+        );
+      } else if (action === 'flag') {
+        await client.query(
+          `UPDATE orders SET payment_status = 'verification_required', payment_note = $2, updated_at = now()
+            WHERE id = $1`,
+          [id, nextPaymentNote(order.payment_note, notes.history)],
+        );
+      } else {
+        await client.query('UPDATE orders SET payment_note = $2, updated_at = now() WHERE id = $1', [
+          id,
+          nextPaymentNote(order.payment_note, notes.history),
+        ]);
+      }
+
+      await client.query(
+        `INSERT INTO order_status_history (order_id, status, note, changed_by) VALUES ($1, $2, $3, $4)`,
+        [id, order.status, notes.history, req.admin.email],
+      );
+      return id;
+    });
+
+    res.json({ order: await loadOrder(updated) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+function notesFor(action, order, note) {
+  const code = order.mpesa_code ? ` (code ${order.mpesa_code})` : '';
+  const history = {
+    verify: note || `Payment verified against the M-Pesa statement${code}`,
+    reject: `Payment rejected${code}: ${note}`,
+    flag: note || `Payment needs a closer look${code}`,
+    note: note,
+  }[action];
+  if (action === 'note' && !note) throw badRequest('Write a note first.');
+  return { history };
+}
+
+/** Internal notes are appended with a timestamp so nothing is overwritten. */
+function nextPaymentNote(existing, addition) {
+  const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  const line = `[${stamp}] ${addition}`;
+  return existing ? `${existing}\n${line}`.slice(-4000) : line;
+}
+
+/* ---------- payment settings ---------- */
+router.get('/payment-settings', requireAdmin, async (req, res, next) => {
+  try {
+    const settings = await loadPaymentSettings();
+    res.json({ settings: serializeSettings(settings) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/payment-settings', requireAdmin, requireRole('admin'), async (req, res, next) => {
+  try {
+    const current = await loadPaymentSettings();
+    const rawNumber = text(req.body?.mpesaNumber ?? req.body?.mpesa_number, 20);
+    if (!rawNumber) throw badRequest('Enter the M-Pesa number that receives payments.', {
+      mpesaNumber: 'Enter the number customers send money to.',
+    });
+    const local = normPhone(rawNumber);
+    if (!local) {
+      throw badRequest('Enter a valid Safaricom number, for example 0726 777 924.', {
+        mpesaNumber: 'Enter a valid Kenyan mobile number.',
+      });
+    }
+    const accountName = text(req.body?.accountName ?? req.body?.account_name, 80);
+    if (accountName.length < 2) throw badRequest('Enter the M-Pesa account holder name.', {
+      accountName: 'Enter the name registered on the M-Pesa line.',
+    });
+    const instructions = multiline(req.body?.instructions, 600);
+    const enabled = req.body?.enabled === undefined ? current.enabled : Boolean(req.body.enabled);
+
+    const numberChanged = local !== current.mpesa_number;
+    const { rows } = await query(
+      `UPDATE payment_settings
+          SET mpesa_number = $1, account_name = $2, instructions = $3, enabled = $4,
+              verified_at = CASE WHEN $5 THEN NULL ELSE verified_at END,
+              verified_by = CASE WHEN $5 THEN NULL ELSE verified_by END,
+              updated_by = $6, updated_at = now()
+        WHERE id = 1
+        RETURNING *`,
+      [local, accountName, instructions, enabled, numberChanged, req.admin.email],
+    );
+    res.json({ settings: serializeSettings(rows[0]), numberChanged });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/payment-settings/verify', requireAdmin, requireRole('admin'), async (req, res, next) => {
+  try {
+    const { rows } = await query(
+      `UPDATE payment_settings
+          SET verified_at = now(), verified_by = $1, updated_at = now()
+        WHERE id = 1 RETURNING *`,
+      [req.admin.email],
+    );
+    res.json({ settings: serializeSettings(rows[0]) });
   } catch (err) {
     next(err);
   }

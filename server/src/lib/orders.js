@@ -1,6 +1,9 @@
 import { query, withTransaction } from '../db.js';
-import { BUSINESS, buildOrderMessage, waUrl } from './business.js';
+import { BUSINESS, PAYMENT_STATUS_LABELS, buildOrderMessage, waUrl } from './business.js';
+import { isValidMpesaCode, loadPaymentSettings, normaliseMpesaCode } from './payments.js';
 import { badRequest, email, multiline, normPhone, oneOf, phoneIntl, positiveInt, text } from './validate.js';
+
+export const PAYMENT_METHOD_VALUES = ['cash_on_delivery', 'pay_on_collection', 'mpesa'];
 
 const round2 = (n) => Math.round(n * 100) / 100;
 
@@ -31,6 +34,12 @@ export function serializeOrder(row, items = [], history = []) {
     total: Number(row.total),
     paymentMethod: row.payment_method,
     paymentStatus: row.payment_status,
+    paymentStatusLabel: PAYMENT_STATUS_LABELS[row.payment_status] || row.payment_status,
+    mpesaCode: row.mpesa_code || null,
+    paymentReceivingNumber: row.payment_receiving_number || null,
+    paymentNote: row.payment_note || null,
+    paymentVerifiedAt: row.payment_verified_at || null,
+    paymentVerifiedBy: row.payment_verified_by || null,
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -48,7 +57,8 @@ export function serializeOrder(row, items = [], history = []) {
 
 const ORDER_COLUMNS = `id, order_no, customer_id, customer_name, customer_phone, customer_email,
   fulfilment, delivery_location, notes, subtotal, delivery_fee, total,
-  payment_method, payment_status, status, created_at, updated_at`;
+  payment_method, payment_status, status, created_at, updated_at,
+  mpesa_code, payment_receiving_number, payment_note, payment_verified_at, payment_verified_by`;
 
 export async function loadOrder(id) {
   const { rows } = await query(`SELECT ${ORDER_COLUMNS} FROM orders WHERE id = $1`, [id]);
@@ -74,6 +84,8 @@ export function buildWhatsappMessage(order) {
     delivery_location: order.deliveryLocation,
     notes: order.notes,
     payment_method: order.paymentMethod,
+    payment_status: order.paymentStatus,
+    mpesa_code: order.mpesaCode,
   }, order.items.map((i) => ({ name: i.name, quantity: i.quantity, line_total: i.lineTotal })));
 }
 
@@ -115,8 +127,37 @@ export async function createOrder(body) {
   }
 
   let paymentMethod = body?.paymentMethod || (fulfilment === 'delivery' ? 'cash_on_delivery' : 'pay_on_collection');
-  oneOf(paymentMethod, ['cash_on_delivery', 'pay_on_collection'], 'paymentMethod');
-  if (fulfilment === 'collection') paymentMethod = 'pay_on_collection';
+  oneOf(paymentMethod, PAYMENT_METHOD_VALUES, 'paymentMethod');
+  if (fulfilment === 'collection' && paymentMethod === 'cash_on_delivery') paymentMethod = 'pay_on_collection';
+
+  // Manual M-Pesa: the customer pays to the business number and types the code.
+  // The money is never assumed to have arrived - an administrator verifies it.
+  const paymentSettings = await loadPaymentSettings();
+  let mpesaCode = null;
+  let paymentReceivingNumber = null;
+  let paymentStatus = 'awaiting_payment';
+  if (paymentMethod === 'mpesa') {
+    if (!paymentSettings.enabled || !paymentSettings.mpesa_number) {
+      throw badRequest('M-Pesa payments are unavailable at the moment. Choose cash on delivery or pay on collection.', {
+        paymentMethod: 'M-Pesa is unavailable right now.',
+      });
+    }
+    mpesaCode = normaliseMpesaCode(body?.mpesaCode ?? body?.mpesa_code ?? body?.transactionCode);
+    if (!isValidMpesaCode(mpesaCode)) {
+      throw badRequest('Enter the M-Pesa confirmation code from your SMS.', {
+        mpesaCode: 'That code does not look right. It is 8-12 letters and numbers, for example RJ41K5M2QZ.',
+      });
+    }
+    const { rows: used } = await query('SELECT order_no FROM orders WHERE upper(mpesa_code) = $1', [mpesaCode]);
+    if (used[0]) {
+      throw badRequest(
+        `That M-Pesa code is already recorded on order ${used[0].order_no}. Message us on WhatsApp if this is a mistake.`,
+        { mpesaCode: 'This transaction code has already been used on another order.' },
+      );
+    }
+    paymentStatus = 'payment_submitted';
+    paymentReceivingNumber = paymentSettings.mpesa_number;
+  }
 
   const idempotencyKey = text(body?.idempotencyKey, 80) || null;
   if (idempotencyKey) {
@@ -173,10 +214,14 @@ export async function createOrder(body) {
     const { rows: orderRows } = await client.query(
       `INSERT INTO orders (customer_id, customer_name, customer_phone, customer_email, fulfilment,
                            delivery_location, notes, subtotal, delivery_fee, total,
-                           payment_method, payment_status, status, idempotency_key)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'unpaid','pending',$12)
+                           payment_method, payment_status, status, idempotency_key,
+                           mpesa_code, payment_receiving_number)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending',$13,$14,$15)
        RETURNING id`,
-      [customerId, name, phone, mail, fulfilment, location, notes, subtotal, deliveryFee, total, paymentMethod, idempotencyKey],
+      [
+        customerId, name, phone, mail, fulfilment, location, notes, subtotal, deliveryFee, total,
+        paymentMethod, paymentStatus, idempotencyKey, mpesaCode, paymentReceivingNumber,
+      ],
     );
     const id = orderRows[0].id;
     const orderNo = `TCC-${orderDatePrefix()}-${String(id).padStart(4, '0')}`;
@@ -196,8 +241,13 @@ export async function createOrder(body) {
 
     await client.query(
       `INSERT INTO order_status_history (order_id, status, note, changed_by)
-       VALUES ($1, 'pending', 'Order placed by the customer', 'customer')`,
-      [id],
+       VALUES ($1, 'pending', $2, 'customer')`,
+      [
+        id,
+        mpesaCode
+          ? `Order placed by the customer - M-Pesa code ${mpesaCode} submitted, awaiting verification`
+          : 'Order placed by the customer',
+      ],
     );
 
     return id;

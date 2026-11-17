@@ -138,3 +138,16 @@ body.tcc-locked{overflow:hidden}
 .track-steps li{font:600 .78rem var(--sans);padding:.3rem .65rem;border-radius:999px;background:var(--cream);color:var(--muted)}
 .track-steps li.done{background:var(--forest);color:#fff}
 .track-steps li.now{background:var(--gold);color:#1a1a12}
+
+/* ---------- manual M-Pesa payment ---------- */
+.tcc-mpesa{display:grid;gap:.7rem;padding:.85rem .9rem;border:1.5px solid #b7dcc3;border-left:5px solid var(--forest);border-radius:10px;background:#f2f8f2}
+.tcc-mpesa[hidden]{display:none!important}
+.tcc-mpesa-title{margin:0;font:700 .98rem var(--sans);color:var(--forest)}
+.tcc-mpesa-send{margin:0;font-size:.95rem;line-height:1.5}
+.tcc-mpesa-send strong{font:700 1.05rem var(--sans);color:var(--forest);white-space:nowrap}
+.tcc-mpesa-name{color:var(--muted);font-size:.86rem}
+.tcc-copy-row{display:flex;gap:.5rem;flex-wrap:wrap}
+.tcc-copy-row .btn{min-height:36px;padding:.35rem .8rem;font-size:.85rem;border-color:var(--forest);color:var(--forest);background:#fff}
+.tcc-mpesa-instructions{margin:0;font-size:.85rem;line-height:1.55;color:var(--ink)}
+.tcc-mpesa .tcc-field{gap:.3rem}
+.tcc-mpesa input{font:600 1rem var(--sans);letter-spacing:.08em;text-transform:uppercase}

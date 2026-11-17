@@ -76,7 +76,11 @@
       <div class="track-items">
         <div><span>Fulfilment</span><span>${order.fulfilment === 'delivery' ? 'Delivery' : 'Collection'}</span></div>
         <div><span>Location</span><span>${esc(order.deliveryLocation || '—')}</span></div>
-        <div><span>Payment</span><span>${esc(order.paymentMethod.replace(/_/g, ' '))} · ${esc(order.paymentStatus)}</span></div>
+        <div><span>Payment</span><span>${esc(order.paymentMethod.replace(/_/g, ' '))} · ${esc(order.paymentStatusLabel || order.paymentStatus)}</span></div>
+        ${order.mpesaCode ? `<div><span>M-Pesa code</span><span>${esc(order.mpesaCode)}</span></div>` : ''}
+        ${order.paymentMethod === 'mpesa' && order.paymentStatus !== 'paid'
+          ? '<div><span>Payment note</span><span>We check your M-Pesa code against our statement before confirming the order.</span></div>'
+          : ''}
         ${order.notes ? `<div><span>Instructions</span><span>${esc(order.notes)}</span></div>` : ''}
       </div>
       <div>

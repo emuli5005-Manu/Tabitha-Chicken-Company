@@ -119,3 +119,8 @@ tbody tr.clickable{cursor:pointer}
 @media (prefers-reduced-motion:reduce){
   .sidebar,.toast,.bar-fill{transition:none}
 }
+
+/* ---------- manual M-Pesa payments ---------- */
+.panel-foot{padding:.9rem 1.1rem;border-top:1px solid var(--line);background:var(--paper)}
+.payment-note{margin:.6rem 0 0;padding:.6rem .75rem;border-radius:8px;background:var(--cream);color:var(--ink);
+  font:500 .82rem/1.5 var(--sans);white-space:pre-wrap;word-break:break-word;max-height:11rem;overflow:auto}

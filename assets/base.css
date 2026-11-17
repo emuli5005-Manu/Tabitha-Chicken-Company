@@ -53,3 +53,8 @@ input[aria-invalid="true"],select[aria-invalid="true"],textarea[aria-invalid="tr
 
 .brand{display:flex;align-items:center;gap:.6rem;text-decoration:none;font:700 1.05rem var(--serif)}
 .brand svg{width:34px;height:34px;flex:none}
+.pill-awaiting_payment{background:#fdf1d3;color:#7a5405;border-color:#eccf8a}
+.pill-payment_submitted{background:#dde9f7;color:#1c4a7a;border-color:#b9d2ee}
+.pill-verification_required{background:#fdeedd;color:#8a4b06;border-color:#f0d0a5}
+.pill-failed{background:#fbe4e2;color:#8a1c14;border-color:#f0c2bd}
+.pill-refunded{background:#eeeae2;color:#4a4636;border-color:#d8d2c4}
